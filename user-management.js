@@ -6,7 +6,7 @@
   var context = {};
   var ROUTE_MODULES = {
     inicio: 'tab_inicio',
-    'sefaz-portal': 'tab_sefaz_portal', 'captador-notas-fiscais': 'tab_captador_notas_fiscais', 'auditor-fiscal': 'tab_auditor_fiscal', dashboard: 'tab_dashboard', 'conttech-simples-nacional': 'tab_conttech_simples_nacional', diagnostico: 'tab_diagnostico',
+    'sefaz-portal': 'tab_sefaz_portal', 'captador-notas-fiscais': 'tab_captador_notas_fiscais', 'auditor-fiscal': 'tab_auditor_fiscal', 'auditor-fiscal-nfe': 'tab_auditor_fiscal_nfe', dashboard: 'tab_dashboard', 'conttech-simples-nacional': 'tab_conttech_simples_nacional', diagnostico: 'tab_diagnostico',
     mei: 'tab_mei', 'controle-mei': 'tab_controle_mei', obrigacoes: 'tab_obrigacoes',
     'certidao-regularidade-fiscal': 'tab_certidao_regularidade_fiscal',
     'ibs-cbs': 'tab_ibs_cbs', 'transicao-reforma': 'tab_transicao_reforma', 'recuperador-pis-cofins': 'tab_recuperador_pis_cofins',
@@ -34,7 +34,7 @@
   };
   var MODULE_GROUPS = [
     { label: 'Visão geral', keys: ['tab_inicio'] },
-    { label: 'Área Fiscal', keys: ['tab_sefaz_portal', 'tab_captador_notas_fiscais', 'tab_auditor_fiscal', 'tab_dashboard', 'tab_conttech_simples_nacional', 'tab_diagnostico', 'tab_mei', 'tab_controle_mei', 'tab_obrigacoes', 'tab_certidao_regularidade_fiscal', 'tab_ibs_cbs', 'tab_transicao_reforma', 'tab_recuperador_pis_cofins', 'tab_planejamento_tributario', 'tab_lei_complementar', 'tab_mei_ibs_cbs', 'tab_parametros_2026', 'tab_consulta_cnpj', 'tab_inscricao_estadual', 'tab_cnae_servicos', 'tab_ncm_tipi', 'tab_consulta_cest', 'tab_cfop', 'tab_icms_difal', 'tab_aliquotas_beneficios', 'tab_aliquotas_iss', 'tab_emissor_nfe', 'tab_nfse_nacional', 'tab_simulador_locacao', 'tab_nbs_cclasstrib', 'tab_calculadora_tributaria', 'tab_cnpj_simples', 'tab_comparativo_regimes'] },
+    { label: 'Área Fiscal', keys: ['tab_sefaz_portal', 'tab_captador_notas_fiscais', 'tab_auditor_fiscal', 'tab_auditor_fiscal_nfe', 'tab_dashboard', 'tab_conttech_simples_nacional', 'tab_diagnostico', 'tab_mei', 'tab_controle_mei', 'tab_obrigacoes', 'tab_certidao_regularidade_fiscal', 'tab_ibs_cbs', 'tab_transicao_reforma', 'tab_recuperador_pis_cofins', 'tab_planejamento_tributario', 'tab_lei_complementar', 'tab_mei_ibs_cbs', 'tab_parametros_2026', 'tab_consulta_cnpj', 'tab_inscricao_estadual', 'tab_cnae_servicos', 'tab_ncm_tipi', 'tab_consulta_cest', 'tab_cfop', 'tab_icms_difal', 'tab_aliquotas_beneficios', 'tab_aliquotas_iss', 'tab_emissor_nfe', 'tab_nfse_nacional', 'tab_simulador_locacao', 'tab_nbs_cclasstrib', 'tab_calculadora_tributaria', 'tab_cnpj_simples', 'tab_comparativo_regimes'] },
     { label: 'Área Contábil', keys: ['tab_analise_balanco', 'tab_lancamentos_contabeis', 'tab_acompanhamento_contabil'] },
     { label: 'RH & Departamento Pessoal', keys: ['tab_rh_dashboard', 'tab_colaboradores', 'tab_ferias', 'tab_afastamentos', 'tab_beneficios', 'tab_ponto_eletronico', 'tab_banco_horas', 'tab_rescisoes', 'tab_holerite', 'tab_documentos_rh'] },
     { label: 'Área Trabalhista', keys: ['tab_folha', 'tab_horas_extras_noturno', 'tab_verbas_rescisorias', 'tab_seguro_desemprego', 'tab_gps_atraso', 'tab_pro_labore', 'tab_irrf_aliquota_efetiva', 'tab_pensao_alimenticia', 'tab_central_calculadoras_rh'] },
