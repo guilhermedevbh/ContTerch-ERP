@@ -838,3 +838,11 @@ tr.row-clickable:hover{background:#f0f4f9}
 .doc-sheet-signatures{display:flex;gap:32px;flex-wrap:wrap;margin-top:46px}
 .doc-sheet-signatures>div{flex:1;min-width:200px;padding-top:6px;border-top:1px solid var(--ink);text-align:center;font-size:8px;color:var(--muted)}
 .doc-type-list{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+.auditoria-divergencia-card{border-left-width:4px;margin-top:12px}
+.auditoria-sev-critico{border-left-color:#a72828}
+.auditoria-sev-alto{border-left-color:#c2601f}
+.auditoria-sev-medio{border-left-color:#9a5706}
+.auditoria-sev-baixo{border-left-color:#285aaf}
+.auditoria-divergencia-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 14px 0}
+.auditoria-divergencia-card .cest-detail{padding:0 14px}
+.auditoria-divergencia-actions{padding:0 14px 14px;justify-content:flex-start}

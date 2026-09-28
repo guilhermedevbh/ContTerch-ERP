@@ -254,6 +254,7 @@
     { route: 'sefaz-portal', label: 'Consulta SEFAZ e Portal do Contribuinte', icon: '▣', desc: 'Consulta oficial de documentos fiscais e gestão segura de certificados' },
     { route: 'captador-notas-fiscais', label: 'Captador de Notas Fiscais', icon: '⇓', desc: 'Painel por empresa da captação automática de NF-e, NFC-e, CT-e e NFS-e via certificado digital' },
     { route: 'auditor-fiscal', label: 'Auditor Fiscal (SPED/EFD)', icon: '◲', desc: 'Validação estrutural de arquivos SPED — EFD ICMS/IPI, EFD Contribuições, ECF, ECD e Simples Nacional' },
+    { route: 'auditor-fiscal-nfe', label: 'Auditor Fiscal Inteligente', icon: '◈', desc: 'Auditoria de NF-e/CT-e em XML: estrutura, cadastro, CFOP × UF, ICMS e matemática, com sugestão de correção por IA' },
     { route: 'dashboard', label: 'Cálculo DAS', icon: '▥', desc: 'Apuração interativa do Simples Nacional' },
     { route: 'conttech-simples-nacional', label: 'Conttech Simples Nacional', icon: '§', desc: 'Simulador de apuração do Simples Nacional em 3 etapas' },
     { route: 'diagnostico', label: 'Diagnóstico Tributário', icon: '◉', desc: 'Riscos, inconsistências e recomendações' },
@@ -5293,6 +5294,7 @@
     else if (state.route === 'sefaz-portal') main.innerHTML = renderSefazPortal();
     else if (state.route === 'captador-notas-fiscais') main.innerHTML = renderCaptadorNotasFiscais();
     else if (state.route === 'auditor-fiscal') main.innerHTML = renderAuditorFiscal();
+    else if (state.route === 'auditor-fiscal-nfe') main.innerHTML = renderAuditoriaFiscalNfe();
     else if (state.route === 'dashboard') main.innerHTML = renderDashboard();
     else if (state.route === 'clientes' && parts[1]) main.innerHTML = renderClientDetail(parts[1]);
     else if (state.route === 'clientes') main.innerHTML = renderClients();
@@ -5374,6 +5376,7 @@
       if (feriasState.loadedForClient !== (currentClient() && currentClient().id)) loadFerias();
       if (rescisoesState.loadedForClient !== (currentClient() && currentClient().id)) loadRescisoes();
     }
+    if (state.route === 'auditor-fiscal-nfe' && auditoriaFiscalState.loadedForClient !== (currentClient() && currentClient().id)) loadAuditoriaFiscal();
     if (state.route === 'central-suporte' && !supportTicketsState.detail && !supportTicketsState.loaded) loadSupportTickets();
     if (state.route === 'suporte-admin' && !supportAdminState.detail && !supportAdminState.loaded) loadSupportAdminDashboard();
     if (state.route === 'configuracoes') loadStripeSettings();
@@ -9013,6 +9016,216 @@
     ].join('');
   }
 
+  var auditoriaFiscalState = { loadedForClient: null, loading: false, items: [] };
+  function auditoriaFiscalUi() {
+    if (!state.auditoriaFiscalUi) state.auditoriaFiscalUi = { view: 'list', detailId: null, detail: null, pendingFile: null, uploading: false, uploadError: '' };
+    return state.auditoriaFiscalUi;
+  }
+  function loadAuditoriaFiscal(force) {
+    if (!apiEnabled() || !apiToken) return Promise.resolve();
+    var client = currentClient();
+    if (!client) return Promise.resolve();
+    if (!force && auditoriaFiscalState.loadedForClient === client.id) return Promise.resolve();
+    auditoriaFiscalState.loading = true;
+    return apiRequest('/api/auditoria-fiscal?clientId=' + encodeURIComponent(client.id)).then(function (payload) {
+      auditoriaFiscalState.items = payload.items || [];
+      auditoriaFiscalState.loadedForClient = client.id;
+      auditoriaFiscalState.loading = false;
+      if (state.route === 'auditor-fiscal-nfe') route();
+    }).catch(function (error) { auditoriaFiscalState.loading = false; toast('Não foi possível carregar as auditorias', error.message, 'error'); });
+  }
+  var AUDITORIA_RISCO_LABELS = { critico: 'Crítico', alto: 'Alto', medio: 'Médio', baixo: 'Baixo', ok: 'OK' };
+  var AUDITORIA_RISCO_ICONS = { critico: '🔴', alto: '🟠', medio: '🟡', baixo: '🔵', ok: '🟢' };
+  function auditoriaRiscoTag(nivel) {
+    var tagClass = nivel === 'critico' || nivel === 'alto' ? 'tag--danger' : nivel === 'medio' ? 'tag--warning' : nivel === 'ok' ? 'tag--success' : 'tag--info';
+    return '<span class="tag ' + tagClass + '">' + AUDITORIA_RISCO_ICONS[nivel] + ' ' + (AUDITORIA_RISCO_LABELS[nivel] || nivel) + '</span>';
+  }
+  var AUDITORIA_DECISAO_LABELS = { pendente: 'Pendente', aceita: 'Aceita', rejeitada: 'Rejeitada', ignorada: 'Ignorada', solicitar_analise: 'Análise solicitada' };
+  function auditoriaPickXmlFile() {
+    var input = document.createElement('input');
+    input.type = 'file'; input.accept = '.xml,text/xml,application/xml';
+    input.onchange = function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      auditoriaFiscalUi().uploadError = '';
+      readFileAsBase64(file).then(function (base64) {
+        auditoriaFiscalUi().pendingFile = { name: file.name, base64: base64 };
+        route();
+      }).catch(function (error) { auditoriaFiscalUi().uploadError = error.message; route(); });
+    };
+    input.click();
+  }
+  function auditoriaClearPendingFile() { auditoriaFiscalUi().pendingFile = null; auditoriaFiscalUi().uploadError = ''; route(); }
+  function submitAuditoriaFiscal() {
+    var client = currentClient();
+    var pending = auditoriaFiscalUi().pendingFile;
+    if (!client || !pending) return;
+    auditoriaFiscalUi().uploading = true;
+    route();
+    apiRequest('/api/auditoria-fiscal', { method: 'POST', body: JSON.stringify({ clientId: client.id, clientName: client.name, fileName: pending.name, xmlBase64: pending.base64 }) })
+      .then(function (result) {
+        auditoriaFiscalState.items.unshift(result.item);
+        var ui = auditoriaFiscalUi();
+        ui.uploading = false; ui.pendingFile = null; ui.view = 'detail'; ui.detailId = result.item.id; ui.detail = result.item;
+        audit('Auditoria fiscal executada', pending.name + ' · risco ' + result.item.nivelRisco);
+        toast('Auditoria concluída', result.item.divergencias.length + ' divergência(s) encontrada(s).', result.item.nivelRisco === 'ok' ? 'success' : 'warning');
+        route();
+      })
+      .catch(function (error) { auditoriaFiscalUi().uploading = false; auditoriaFiscalUi().uploadError = error.message; route(); });
+  }
+  function openAuditoriaFiscalDetail(id) {
+    var ui = auditoriaFiscalUi();
+    ui.view = 'detail'; ui.detailId = id; ui.detail = null;
+    route();
+    apiRequest('/api/auditoria-fiscal/' + encodeURIComponent(id)).then(function (result) {
+      auditoriaFiscalUi().detail = result.item;
+      route();
+    }).catch(function (error) { toast('Não foi possível abrir a análise', error.message, 'error'); closeAuditoriaFiscalDetail(); });
+  }
+  function closeAuditoriaFiscalDetail() {
+    var ui = auditoriaFiscalUi();
+    ui.view = 'list'; ui.detailId = null; ui.detail = null;
+    route();
+  }
+  function auditoriaFiscalDecidir(divId, decisao) {
+    var ui = auditoriaFiscalUi();
+    if (!ui.detail) return;
+    var justificativa = '';
+    if (decisao === 'rejeitada') {
+      justificativa = window.prompt('Explique por que esta sugestão está sendo rejeitada:', '') || '';
+      if (!justificativa.trim()) { toast('Justificativa obrigatória', 'Informe o motivo para rejeitar a sugestão.', 'warning'); return; }
+    }
+    apiRequest('/api/auditoria-fiscal/' + encodeURIComponent(ui.detailId) + '/divergencias/' + encodeURIComponent(divId), { method: 'PUT', body: JSON.stringify({ decisao: decisao, justificativa: justificativa }) })
+      .then(function (result) {
+        auditoriaFiscalUi().detail = result.item;
+        var index = auditoriaFiscalState.items.findIndex(function (item) { return item.id === result.item.id; });
+        if (index >= 0) auditoriaFiscalState.items[index] = Object.assign({}, auditoriaFiscalState.items[index], { nivelRisco: result.item.nivelRisco, riscoScore: result.item.riscoScore });
+        route();
+      }).catch(function (error) { toast('Não foi possível registrar a decisão', error.message, 'error'); });
+  }
+  function auditoriaFiscalPedirIA(itemNumero) {
+    var ui = auditoriaFiscalUi();
+    if (!ui.detail) return;
+    toast('Consultando a IA…', 'Analisando o item ' + itemNumero + '.', 'info');
+    apiRequest('/api/auditoria-fiscal/' + encodeURIComponent(ui.detailId) + '/sugestao-ia', { method: 'POST', body: JSON.stringify({ itemNumero: itemNumero }) })
+      .then(function (result) {
+        var sugestao = result.sugestao;
+        var body = '<p><b>Classificação coerente?</b> ' + (sugestao.classificacaoCoerente ? 'Sim' : 'Não') + '</p>' +
+          (sugestao.cfopSugerido ? '<p><b>CFOP sugerido:</b> ' + esc(sugestao.cfopSugerido) + '</p>' : '') +
+          (sugestao.cstSugerido ? '<p><b>CST/CSOSN sugerido:</b> ' + esc(sugestao.cstSugerido) + '</p>' : '') +
+          (sugestao.ncmSugerido ? '<p><b>NCM sugerido:</b> ' + esc(sugestao.ncmSugerido) + '</p>' : '') +
+          '<p><b>Motivo:</b> ' + esc(sugestao.motivo) + '</p>' +
+          '<p><b>Confiança:</b> ' + sugestao.confianca + '%</p>' +
+          (sugestao.perguntas.length ? '<p><b>Para reduzir a dúvida, seria útil saber:</b></p><ul>' + sugestao.perguntas.map(function (q) { return '<li>' + esc(q) + '</li>'; }).join('') + '</ul>' : '') +
+          '<div class="info-banner" style="margin-top:10px"><span>i</span><div>Sugestão gerada por IA para apoiar sua análise — não altera o documento automaticamente.</div></div>';
+        openModal('Sugestão da IA — item ' + itemNumero, body, '<button class="secondary-button" data-action="close-modal">Fechar</button>');
+      }).catch(function (error) { toast('IA indisponível', error.message, 'error'); });
+  }
+  function auditoriaFiscalAbrirTicket(divId) {
+    var ui = auditoriaFiscalUi(), detail = ui.detail;
+    if (!detail) return;
+    var divergencia = (detail.divergencias || []).find(function (item) { return item.id === divId; });
+    if (!divergencia) return;
+    var priorityMap = { critico: 'P1', alto: 'P2', medio: 'P3', baixo: 'P4' };
+    var description = 'Divergência identificada pelo Auditor Fiscal Inteligente.\n\n' +
+      'Documento: ' + detail.tipoDocumento + ' nº ' + detail.numero + '/' + detail.serie + ' — ' + detail.arquivoNome + '\n' +
+      'Emitente: ' + detail.emitenteNome + ' (' + detail.emitenteCnpj + ')\n' +
+      'Campo: ' + divergencia.campo + '\nInformado: ' + divergencia.informado + '\nEsperado: ' + divergencia.esperado + '\n' +
+      'Motivo: ' + divergencia.motivo + '\nImpacto: ' + divergencia.impacto + '\nBase legal: ' + divergencia.baseLegal;
+    apiRequest('/api/support/tickets', {
+      method: 'POST', body: JSON.stringify({
+        category: 'chamado', subject: 'Auditor Fiscal: ' + divergencia.campo + ' — ' + detail.arquivoNome,
+        description: description, moduleKey: 'tab_auditor_fiscal_nfe', priority: priorityMap[divergencia.severidade] || 'P3',
+        pageContext: 'auditor-fiscal-nfe',
+      })
+    }).then(function (result) {
+      toast('Ticket aberto', 'Protocolo ' + result.ticket.protocol, 'success');
+      auditoriaFiscalDecidir(divId, 'solicitar_analise');
+    }).catch(function (error) { toast('Não foi possível abrir o ticket', error.message, 'error'); });
+  }
+  function deleteAuditoriaFiscal(id) {
+    if (!requireAdmin()) return;
+    if (!window.confirm('Excluir esta análise de auditoria fiscal?')) return;
+    apiRequest('/api/auditoria-fiscal/' + encodeURIComponent(id), { method: 'DELETE' }).then(function () {
+      auditoriaFiscalState.items = auditoriaFiscalState.items.filter(function (item) { return item.id !== id; });
+      closeAuditoriaFiscalDetail();
+      toast('Análise excluída', '', 'success');
+    }).catch(function (error) { toast('Não foi possível excluir', error.message, 'error'); });
+  }
+  function auditoriaFiscalDivergenciaCard(div) {
+    var actionsDisabled = div.decisao !== 'pendente';
+    return '<div class="card auditoria-divergencia-card auditoria-sev-' + div.severidade + '">' +
+      '<div class="auditoria-divergencia-head">' + auditoriaRiscoTag(div.severidade) + '<b>' + esc(div.campo) + '</b>' +
+      '<span class="tag">Confiança: ' + div.confianca + '%</span>' + (div.decisao !== 'pendente' ? '<span class="tag tag--info">' + AUDITORIA_DECISAO_LABELS[div.decisao] + '</span>' : '') + '</div>' +
+      '<dl class="cest-detail">' +
+        '<div><dt>Informado na nota</dt><dd>' + esc(div.informado) + '</dd></div>' +
+        '<div><dt>Resultado da auditoria</dt><dd>' + esc(div.esperado) + '</dd></div>' +
+        '<div><dt>Motivo</dt><dd>' + esc(div.motivo) + '</dd></div>' +
+        '<div><dt>Impacto</dt><dd>' + esc(div.impacto) + '</dd></div>' +
+        '<div><dt>Base legal</dt><dd>' + esc(div.baseLegal) + '</dd></div>' +
+        '<div><dt>Ação recomendada</dt><dd>' + esc(div.acaoRecomendada) + '</dd></div>' +
+        (div.justificativa ? '<div><dt>Justificativa</dt><dd>' + esc(div.justificativa) + '</dd></div>' : '') +
+      '</dl>' +
+      '<div class="page-actions auditoria-divergencia-actions">' +
+        '<button class="secondary-button" data-action="auditoria-ia" data-item="' + esc(div.itemNumero || '') + '"' + (div.itemNumero ? '' : ' disabled') + '>◈ Pedir sugestão da IA</button>' +
+        '<button class="secondary-button" data-action="auditoria-decidir" data-id="' + div.id + '" data-decisao="aceita"' + (actionsDisabled ? ' disabled' : '') + '>✓ Aceitar</button>' +
+        '<button class="secondary-button" data-action="auditoria-decidir" data-id="' + div.id + '" data-decisao="rejeitada"' + (actionsDisabled ? ' disabled' : '') + '>✗ Rejeitar</button>' +
+        '<button class="secondary-button" data-action="auditoria-decidir" data-id="' + div.id + '" data-decisao="ignorada"' + (actionsDisabled ? ' disabled' : '') + '>Ignorar</button>' +
+        '<button class="secondary-button" data-action="auditoria-ticket" data-id="' + div.id + '"' + (actionsDisabled ? ' disabled' : '') + '>▤ Abrir ticket fiscal</button>' +
+      '</div>' +
+    '</div>';
+  }
+  function renderAuditoriaFiscalDetail() {
+    var ui = auditoriaFiscalUi(), detail = ui.detail;
+    if (!detail) return pageHeading('Auditor Fiscal Inteligente', 'Carregando análise…', '<button class="secondary-button" data-action="auditoria-voltar">← Voltar</button>');
+    var divergencias = detail.divergencias || [];
+    var resumo = detail.resumo || {};
+    return [
+      pageHeading('Auditor Fiscal Inteligente', detail.arquivoNome + ' · ' + detail.tipoDocumento + ' nº ' + (detail.numero || '—') + '/' + (detail.serie || '—'),
+        '<button class="secondary-button" data-action="auditoria-voltar">← Voltar</button>' + (isAdmin() ? '<button class="secondary-button" data-action="auditoria-excluir" data-id="' + detail.id + '">🗑 Excluir</button>' : '')),
+      '<section class="card"><div class="card-body"><dl class="cest-detail">' +
+        '<div><dt>Emitente</dt><dd>' + esc(detail.emitenteNome) + (detail.emitenteCnpj ? ' — ' + esc(detail.emitenteCnpj) : '') + '</dd></div>' +
+        '<div><dt>Destinatário</dt><dd>' + esc(detail.destinatarioNome || '—') + (detail.destinatarioCnpj ? ' — ' + esc(detail.destinatarioCnpj) : '') + '</dd></div>' +
+        '<div><dt>Data de emissão</dt><dd>' + (detail.dataEmissao ? dateBR(detail.dataEmissao) : '—') + '</dd></div>' +
+        '<div><dt>Chave de acesso</dt><dd>' + esc(detail.chaveAcesso || '—') + '</dd></div>' +
+        '<div><dt>Valor total</dt><dd>' + money(detail.valorTotal) + '</dd></div>' +
+        '<div><dt>Nível de risco</dt><dd>' + auditoriaRiscoTag(detail.nivelRisco) + ' · score técnico ' + detail.riscoScore + '/100</dd></div>' +
+      '</dl></div></section>',
+      '<div class="hr-calc-result-hero" style="flex-wrap:wrap">' +
+        ['critico', 'alto', 'medio', 'baixo'].map(function (nivel) { return '<div><small>' + AUDITORIA_RISCO_ICONS[nivel] + ' ' + AUDITORIA_RISCO_LABELS[nivel] + '</small><strong>' + (resumo[nivel] || 0) + '</strong></div>'; }).join('') +
+        '<div><small>🟢 Itens conferidos</small><strong>' + (resumo.totalItens || 0) + '</strong></div>' +
+      '</div>',
+      divergencias.length ? divergencias.map(auditoriaFiscalDivergenciaCard).join('') : '<div class="info-banner"><span>✓</span><div>Nenhuma divergência encontrada nesta análise.</div></div>',
+      '<div class="info-banner" style="margin-top:10px"><span>i</span><div>Auditoria automática de estrutura, CFOP × UF, ICMS (alíquotas de referência) e matemática do documento. Não substitui a análise do profissional fiscal responsável — divergências dependentes de interpretação (benefícios fiscais, reduções de base) aparecem com confiança reduzida.</div></div>',
+    ].join('');
+  }
+  function renderAuditoriaFiscalList() {
+    var client = currentClient();
+    if (!client) return pageHeading('Auditor Fiscal Inteligente', 'Selecione um cliente no topo da página para auditar documentos fiscais.', '');
+    var ui = auditoriaFiscalUi();
+    var items = auditoriaFiscalState.items || [];
+    var rows = items.map(function (item) {
+      return '<tr><td>' + esc(item.arquivoNome) + '<br><small class="subtle">' + esc(item.tipoDocumento) + ' nº ' + esc(item.numero || '—') + '</small></td>' +
+        '<td>' + esc(item.emitenteNome || '—') + '</td><td>' + money(item.valorTotal) + '</td>' +
+        '<td>' + auditoriaRiscoTag(item.nivelRisco) + '</td><td>' + dateBR(item.createdAt) + '</td>' +
+        '<td><button class="row-button" data-action="auditoria-abrir" data-id="' + item.id + '" title="Ver detalhes">→</button></td></tr>';
+    }).join('') || '<tr><td colspan="6"><div class="empty-state"><h3>Nenhuma auditoria realizada ainda</h3><p>Envie o XML de uma NF-e ou CT-e para começar.</p></div></td></tr>';
+    return [
+      pageHeading('Auditor Fiscal Inteligente', 'Cliente: ' + esc(client.name) + ' · auditoria de NF-e/CT-e em XML (estrutura, CFOP, ICMS e matemática)', ''),
+      '<section class="card"><header class="card-header"><div><h2>Nova auditoria</h2><small>Envie o XML original do documento fiscal (modelo 55/65/57)</small></div></header><div class="card-body">' +
+        (ui.pendingFile
+          ? '<p><b>Arquivo selecionado:</b> ' + esc(ui.pendingFile.name) + '</p><div class="page-actions">' +
+            '<button class="secondary-button" data-action="auditoria-limpar-arquivo">Trocar arquivo</button>' +
+            '<button class="primary-button" data-action="auditoria-executar"' + (ui.uploading ? ' disabled' : '') + '>' + (ui.uploading ? 'Analisando…' : '▣ Executar auditoria') + '</button>' +
+          '</div>'
+          : '<button class="secondary-button" data-action="auditoria-selecionar-arquivo">↥ Selecionar XML</button>') +
+        (ui.uploadError ? '<div class="info-banner" style="margin-top:10px"><span>!</span><div>' + esc(ui.uploadError) + '</div></div>' : '') +
+      '</div></section>',
+      '<section class="card"><div class="table-wrap"><table><thead><tr><th>Documento</th><th>Emitente</th><th>Valor</th><th>Risco</th><th>Data</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></section>',
+    ].join('');
+  }
+  function renderAuditoriaFiscalNfe() { return auditoriaFiscalUi().view === 'detail' ? renderAuditoriaFiscalDetail() : renderAuditoriaFiscalList(); }
+
   var ALIMONY_INSS_2026 = [
     { limit: 1621.00, rate: .075 },
     { limit: 2902.84, rate: .09 },
@@ -11099,6 +11312,15 @@
     else if (action === 'ponto-approve') approvePonto(actionEl.getAttribute('data-id'));
     else if (action === 'ponto-delete') deletePonto(actionEl.getAttribute('data-id'));
     else if (action === 'doc-select') { docsUi().tipo = actionEl.getAttribute('data-tipo'); route(); }
+    else if (action === 'auditoria-selecionar-arquivo') auditoriaPickXmlFile();
+    else if (action === 'auditoria-limpar-arquivo') auditoriaClearPendingFile();
+    else if (action === 'auditoria-executar') submitAuditoriaFiscal();
+    else if (action === 'auditoria-abrir') openAuditoriaFiscalDetail(actionEl.getAttribute('data-id'));
+    else if (action === 'auditoria-voltar') closeAuditoriaFiscalDetail();
+    else if (action === 'auditoria-excluir') deleteAuditoriaFiscal(actionEl.getAttribute('data-id'));
+    else if (action === 'auditoria-decidir') auditoriaFiscalDecidir(actionEl.getAttribute('data-id'), actionEl.getAttribute('data-decisao'));
+    else if (action === 'auditoria-ticket') auditoriaFiscalAbrirTicket(actionEl.getAttribute('data-id'));
+    else if (action === 'auditoria-ia') auditoriaFiscalPedirIA(actionEl.getAttribute('data-item'));
     else if (action === 'ajuste-new') openAjusteForm();
     else if (action === 'ajuste-cancel') closeAjusteForm();
     else if (action === 'ajuste-save') submitAjusteForm();
