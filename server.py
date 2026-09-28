@@ -2974,6 +2974,242 @@ def auditoria_risk_summary(findings: list[dict]) -> tuple[dict, int, str]:
     return counts, score, nivel
 
 
+# ---------------------------------------------------------------------------
+# Auditoria de NFS-e (padrão nacional) — estrutura, cadastro, matemática do
+# ISSQN, alíquota dentro dos limites legais e local de incidência.
+#
+# A tabela de exceções abaixo cobre apenas os subitens da lista anexa à LC
+# 116/2003 mais documentados na doutrina — a Lei tem cerca de 20 hipóteses
+# no art. 3º e esta auditoria NÃO afirma cobertura completa. Para qualquer
+# código de serviço fora desta tabela, o resultado é um aviso pedindo
+# validação manual, nunca uma afirmação de que a regra geral se aplica.
+# ---------------------------------------------------------------------------
+
+LC116_ART3_EXCECOES = {
+    "3.05": ("II", "local da instalação dos andaimes, palcos, coberturas e outras estruturas"),
+    "7.02": ("III", "local da execução da obra"),
+    "7.19": ("III", "local da execução da obra"),
+    "7.04": ("IV", "local da demolição"),
+    "7.05": ("V", "local da edificação/obra"),
+    "7.09": ("VI", "local da execução da coleta/limpeza/destinação de resíduos"),
+    "7.10": ("VII", "local da execução da limpeza/manutenção/conservação"),
+    "7.11": ("VIII", "local da execução da decoração/jardinagem/poda"),
+    "7.12": ("IX", "local do controle/tratamento do efluente"),
+    "7.16": ("XII", "local do florestamento/reflorestamento/exploração florestal"),
+    "7.17": ("XIII", "local da execução do escoramento/contenção de encostas"),
+    "7.18": ("XIV", "local da limpeza/dragagem"),
+    "11.01": ("XV", "local onde o bem está guardado ou estacionado"),
+    "11.02": ("XVI", "local dos bens ou do domicílio das pessoas vigiadas/seguradas/monitoradas"),
+    "11.04": ("XVII", "local do armazenamento/depósito/carga/descarga/guarda do bem"),
+    "16.01": ("XIX", "município onde é executado o transporte"),
+    "17.05": ("XX", "estabelecimento do tomador da mão de obra"),
+    "17.10": ("XXI", "local da feira/exposição/congresso a que se refere o serviço"),
+    "4.22": ("XXII", "domicílio do tomador do serviço (plano de saúde)"),
+    "4.23": ("XXII", "domicílio do tomador do serviço (plano odontológico)"),
+    "5.09": ("XXII", "domicílio do tomador do serviço (medicina de grupo)"),
+    "15.01": ("XXIII", "domicílio do tomador do serviço (administradora de cartão)"),
+    "10.04": ("XXIV", "domicílio do tomador do serviço (arrendamento mercantil)"),
+    "15.09": ("XXIV", "domicílio do tomador do serviço (arrendamento mercantil)"),
+}
+LC116_ISS_SEM_PISO_MINIMO = {"7.02", "7.05", "16.01"}
+
+
+def auditoria_extract_nfse(xml_data: bytes) -> dict:
+    """Extrai da NFS-e (padrão nacional) os campos necessários para a
+    auditoria em valores numéricos brutos — mesma lógica de
+    auditoria_extract_document, mas para infNFSe/infDPS em vez de infNFe."""
+    try:
+        root = ET.fromstring(xml_data)
+    except ET.ParseError as error:
+        raise ValueError("O XML anexado não é um documento fiscal válido.") from error
+    inf = next((node for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "infNFSe"), None)
+    if inf is None:
+        raise ValueError("O XML não contém a estrutura infNFSe do padrão nacional de NFS-e.")
+    xml_id = inf.attrib.get("Id", "")
+    xml_key_match = re.search(r"(\d{50})", xml_id) or re.search(r"(\d{50})", xml_text(inf, "chNFSe"))
+    xml_key = xml_key_match.group(1) if xml_key_match else ""
+
+    def first_node(names: set[str]) -> ET.Element | None:
+        return next((node for node in inf.iter() if node.tag.rsplit("}", 1)[-1] in names), None)
+
+    dps = first_node({"infDPS", "DPS"})
+    provider = first_node({"prest", "prestador", "emit"})
+    taker = first_node({"toma", "tomador", "dest"})
+    service = first_node({"serv", "servico"}) or inf
+
+    def party(node: ET.Element | None) -> dict:
+        return {
+            "name": xml_text(node, "xNome"), "document": xml_text(node, "CNPJ") or xml_text(node, "CPF"),
+            "im": xml_text(node, "IM"), "city": xml_text(node, "xMun"),
+        }
+
+    service_value = auditoria_xml_float(inf, "vServPrest") or auditoria_xml_float(dps, "vServ") or auditoria_xml_float(inf, "vServ")
+    return {
+        "xmlKey": xml_key, "numero": xml_text(inf, "nNFSe"), "serie": xml_text(inf, "serie") or xml_text(inf, "serieDPS"),
+        "dataEmissao": (xml_text(inf, "dhProc") or xml_text(inf, "dhEmi") or xml_text(dps, "dCompet") or "")[:10],
+        "issuer": party(provider), "recipient": party(taker),
+        "servicoCodigo": (xml_text(service, "cTribNac") or xml_text(service, "cServ")).strip(),
+        "servicoDescricao": xml_text(service, "xDescServ") or xml_text(service, "xDesc"),
+        "localIncidencia": xml_text(inf, "xLocIncid") or xml_text(inf, "cLocIncid"),
+        "opSimplesNacional": xml_text(dps, "opSimpNac"),
+        "valorServico": service_value,
+        "descontoIncondicionado": auditoria_xml_float(inf, "vDescIncond"),
+        "deducoes": auditoria_xml_float(inf, "vDedRed"),
+        "baseCalculo": auditoria_xml_float(inf, "vBC"),
+        "aliquota": auditoria_xml_float(inf, "pAliqAplic") or auditoria_xml_float(inf, "pAliq"),
+        "iss": auditoria_xml_float(inf, "vISSQN") or auditoria_xml_float(inf, "vISS"),
+        "issRetido": auditoria_xml_float(inf, "vISSQNRet") or auditoria_xml_float(inf, "vISSRet"),
+        "irrf": auditoria_xml_float(inf, "vIRRF"),
+        "inss": auditoria_xml_float(inf, "vINSS") or auditoria_xml_float(inf, "vCP"),
+        "csll": auditoria_xml_float(inf, "vCSLL"),
+        "pis": auditoria_xml_float(inf, "vPIS"),
+        "cofins": auditoria_xml_float(inf, "vCOFINS"),
+        "totalRetencoesFederais": auditoria_xml_float(inf, "vTotalRetFed") or auditoria_xml_float(inf, "vTotalRet"),
+    }
+
+
+def auditoria_run_checks_nfse(doc: dict) -> list[dict]:
+    findings: list[dict] = []
+    if not doc["servicoDescricao"] and not doc["servicoCodigo"]:
+        findings.append(auditoria_finding(
+            "critico", "Descrição do serviço", "ausente", "descrição e/ou código de tributação nacional",
+            "A NFS-e não informa a descrição nem o código de tributação nacional do serviço prestado.",
+            "Impede a classificação tributária e a conferência da alíquota do ISS.",
+            "Manual de Orientação do Contribuinte — NFS-e Padrão Nacional", 95,
+        ))
+        return findings
+
+    issuer_doc = re.sub(r"\D", "", doc["issuer"].get("document", ""))
+    if len(issuer_doc) not in (11, 14):
+        findings.append(auditoria_finding(
+            "alto", "Cadastro do prestador", doc["issuer"].get("document") or "—", "CNPJ (14 dígitos) ou CPF (11 dígitos)",
+            "O CNPJ/CPF do prestador está ausente ou em formato inválido no XML.",
+            "Compromete a identificação do prestador e a validação fiscal da operação.",
+            "Manual de Orientação do Contribuinte — NFS-e Padrão Nacional", 95,
+        ))
+    recipient_doc = re.sub(r"\D", "", doc["recipient"].get("document", ""))
+    if recipient_doc and len(recipient_doc) not in (11, 14):
+        findings.append(auditoria_finding(
+            "medio", "Cadastro do tomador", doc["recipient"].get("document") or "—", "CNPJ (14 dígitos) ou CPF (11 dígitos)",
+            "O CNPJ/CPF do tomador está em formato inválido no XML.",
+            "Pode indicar erro de preenchimento no cadastro do tomador.",
+            "Manual de Orientação do Contribuinte — NFS-e Padrão Nacional", 85,
+        ))
+
+    # opSimpNac (padrão nacional): 1=não optante, 2=optante ME/EPP, 3=optante MEI
+    is_simples = doc["opSimplesNacional"].strip() in ("2", "3")
+    if doc["valorServico"] > 0 and doc["baseCalculo"] > 0:
+        expected_bc = round(doc["valorServico"] - doc["descontoIncondicionado"] - doc["deducoes"], 2)
+        if abs(expected_bc - doc["baseCalculo"]) > 0.02:
+            findings.append(auditoria_finding(
+                "alto", "Base de cálculo do ISSQN", f"R$ {doc['baseCalculo']:.2f}", f"R$ {expected_bc:.2f}",
+                "A base de cálculo informada não confere com valor do serviço menos desconto incondicionado menos deduções.",
+                f"Diferença de R$ {abs(expected_bc - doc['baseCalculo']):.2f}.",
+                "Conferência aritmética interna (Manual de Orientação do Contribuinte — NFS-e)", 97,
+            ))
+
+    base_ref = doc["baseCalculo"] if doc["baseCalculo"] > 0 else doc["valorServico"]
+    if base_ref > 0 and doc["aliquota"] > 0 and doc["iss"] > 0:
+        expected_iss = round(base_ref * doc["aliquota"] / 100, 2)
+        if abs(expected_iss - doc["iss"]) > max(0.05, doc["iss"] * 0.02):
+            findings.append(auditoria_finding(
+                "alto", "ISSQN apurado", f"R$ {doc['iss']:.2f}", f"R$ {expected_iss:.2f}",
+                "O ISSQN apurado não confere com base de cálculo × alíquota aplicada informadas no documento.",
+                f"Diferença de R$ {abs(expected_iss - doc['iss']):.2f}.",
+                "Conferência aritmética interna (Manual de Orientação do Contribuinte — NFS-e)", 96,
+            ))
+
+    if doc["aliquota"] > 5:
+        findings.append(auditoria_finding(
+            "critico", "Alíquota do ISSQN", f"{doc['aliquota']}%", "até 5%",
+            "A alíquota aplicada excede o limite máximo de 5% do ISS previsto na Lei Complementar nº 116/2003.",
+            "Cobrança de ISS acima do limite legal.",
+            "Lei Complementar nº 116/2003, art. 8º, II", 92,
+        ))
+    elif doc["aliquota"] > 0 and doc["aliquota"] < 2 and doc["servicoCodigo"] not in LC116_ISS_SEM_PISO_MINIMO and not is_simples:
+        findings.append(auditoria_finding(
+            "alto", "Alíquota do ISSQN", f"{doc['aliquota']}%", "mínimo de 2%",
+            "A alíquota aplicada está abaixo do piso de 2% do ISS previsto na Lei Complementar nº 116/2003 (art. 8º-A, "
+            "incluído pela LC 157/2016), fora das exceções dos subitens 7.02, 7.05 e 16.01 da lista anexa.",
+            "Pode configurar concessão de benefício fiscal vedado (guerra fiscal do ISS).",
+            "Lei Complementar nº 116/2003, art. 8º-A", 80,
+            acao="Confirmar se há redução/benefício autorizado por convênio, ou se o código de serviço está corretamente enquadrado.",
+        ))
+
+    if is_simples:
+        findings.append(auditoria_finding(
+            "baixo", "Regime tributário do prestador", "Optante pelo Simples Nacional",
+            "tabela progressiva do Simples Nacional (Anexo III, IV ou V da LC 123/2006)",
+            "O prestador é optante pelo Simples Nacional — a alíquota do ISS aplicável segue a tabela progressiva do "
+            "Simples Nacional por anexo e faixa de receita bruta, que pode ser diferente da alíquota municipal cheia "
+            "informada no documento.",
+            "Aplicar a alíquota municipal em vez da tabela do Simples Nacional pode gerar recolhimento incorreto de ISS.",
+            "Lei Complementar nº 123/2006, arts. 18 e 18-A", 65,
+            acao="Confirmar no PGDAS-D a alíquota efetiva do Simples Nacional desta competência e atividade.",
+        ))
+
+    codigo = doc["servicoCodigo"]
+    excecao = LC116_ART3_EXCECOES.get(codigo)
+    local_incid = doc["localIncidencia"].strip()
+    prestador_city = doc["issuer"].get("city", "").strip()
+    if excecao and local_incid and prestador_city and local_incid.split("/")[0].strip().lower() == prestador_city.split("/")[0].strip().lower():
+        inciso, regra = excecao
+        findings.append(auditoria_finding(
+            "medio", "Local de incidência do ISSQN", local_incid, f"local conforme o inciso {inciso} do art. 3º ({regra})",
+            f"O código de serviço {codigo} está entre as exceções do art. 3º da Lei Complementar nº 116/2003 — o ISS "
+            f"seria devido no {regra}, não necessariamente no estabelecimento do prestador — mas o município de "
+            "incidência informado coincide com o do prestador.",
+            "Pode indicar recolhimento do ISS ao município incorreto.",
+            f"Lei Complementar nº 116/2003, art. 3º, inciso {inciso}", 60,
+            acao="Confirmar o local efetivo de execução/prestação do serviço e corrigir o município de incidência se necessário.",
+        ))
+    elif not excecao and codigo:
+        findings.append(auditoria_finding(
+            "baixo", "Local de incidência do ISSQN", codigo, "verificação manual recomendada",
+            "Este código de serviço não está coberto pela lista de exceções de local de incidência que esta auditoria "
+            "automática reconhece com segurança — a Lei Complementar nº 116/2003 (art. 3º) tem cerca de 20 hipóteses "
+            "especiais e nem todas estão mapeadas aqui.",
+            "Um enquadramento incorreto do local de incidência pode gerar recolhimento do ISS ao município errado.",
+            "Lei Complementar nº 116/2003, art. 3º", 40,
+            acao="Confirmar manualmente, com o profissional fiscal responsável, se este código de serviço está entre as exceções de local de incidência do art. 3º.",
+        ))
+
+    soma_ret = round(doc["irrf"] + doc["inss"] + doc["csll"] + doc["pis"] + doc["cofins"], 2)
+    if doc["totalRetencoesFederais"] > 0 and abs(soma_ret - doc["totalRetencoesFederais"]) > 0.05:
+        findings.append(auditoria_finding(
+            "medio", "Total das retenções federais", f"R$ {doc['totalRetencoesFederais']:.2f}", f"R$ {soma_ret:.2f}",
+            "O total das retenções federais informado não confere com a soma de IRRF, INSS/CP, CSLL, PIS e COFINS retidos.",
+            f"Diferença de R$ {abs(soma_ret - doc['totalRetencoesFederais']):.2f}.",
+            "Conferência aritmética interna (Manual de Orientação do Contribuinte — NFS-e)", 95,
+        ))
+    elif soma_ret == 0 and doc["valorServico"] >= 5000:
+        findings.append(auditoria_finding(
+            "baixo", "Retenções federais", "nenhuma retenção informada", "verificar aplicabilidade de retenção",
+            "Não há retenções federais informadas nesta NFS-e e o valor do serviço é relevante — vale confirmar se a "
+            "operação está sujeita a retenção de IRRF/CSLL/PIS/COFINS conforme a Instrução Normativa RFB nº 1.234/2012 "
+            "e a natureza do serviço e do tomador.",
+            "A ausência de retenção obrigatória pode gerar autuação e multa ao tomador responsável.",
+            "Instrução Normativa RFB nº 1.234/2012", 40,
+            acao="Confirmar com o profissional fiscal responsável se a operação exige retenção.",
+        ))
+    return findings
+
+
+def auditoria_extract_any(xml_data: bytes) -> tuple[str, dict]:
+    """Detecta se o XML enviado é uma NF-e/CT-e ou uma NFS-e (padrão
+    nacional) e devolve o extrator correspondente já aplicado."""
+    try:
+        root = ET.fromstring(xml_data)
+    except ET.ParseError as error:
+        raise ValueError("O XML anexado não é um documento fiscal válido.") from error
+    tags = {node.tag.rsplit("}", 1)[-1] for node in root.iter()}
+    if tags & {"infNFe", "infCte", "infCTe"}:
+        return "nfe", auditoria_extract_document(xml_data)
+    if "infNFSe" in tags:
+        return "nfse", auditoria_extract_nfse(xml_data)
+    raise ValueError("O XML não contém uma estrutura reconhecida de NF-e, CT-e ou NFS-e (padrão nacional). Envie o XML original do documento.")
+
+
 def auditoria_ai_suggestion(item: dict) -> dict:
     """Pede à IA uma sugestão de classificação fiscal (CFOP/CST/NCM) para um
     item específico, com motivo e confiança. Só é chamada quando o usuário
@@ -8776,13 +9012,29 @@ class SimplesCalcHandler(SimpleHTTPRequestHandler):
                 if not client_id or not client_name:
                     raise ValueError("Informe o cliente.")
                 xml_bytes = decode_base64_field(payload.get("xmlBase64", ""), MAX_AUDITORIA_XML_BYTES, "XML do documento fiscal")
-                doc = auditoria_extract_document(xml_bytes)
-                findings = auditoria_run_checks(doc)
+                doc_type, doc = auditoria_extract_any(xml_bytes)
+                if doc_type == "nfe":
+                    findings = auditoria_run_checks(doc)
+                    header = {
+                        "tipo_documento": doc["modelLabel"] or "NF-e", "modelo": doc["modelCode"], "numero": doc["numero"], "serie": doc["serie"],
+                        "chave_acesso": doc["xmlKey"], "emitente_nome": doc["issuer"].get("name", ""), "emitente_cnpj": doc["issuer"].get("document", ""),
+                        "destinatario_nome": doc["recipient"].get("name", ""), "destinatario_cnpj": doc["recipient"].get("document", ""),
+                        "data_emissao": doc["dataEmissao"], "valor_total": round(doc["taxes"].get("vNF", 0), 2), "itens": doc["items"],
+                    }
+                else:
+                    findings = auditoria_run_checks_nfse(doc)
+                    header = {
+                        "tipo_documento": "NFS-e", "modelo": "", "numero": doc["numero"], "serie": doc["serie"],
+                        "chave_acesso": doc["xmlKey"], "emitente_nome": doc["issuer"].get("name", ""), "emitente_cnpj": doc["issuer"].get("document", ""),
+                        "destinatario_nome": doc["recipient"].get("name", ""), "destinatario_cnpj": doc["recipient"].get("document", ""),
+                        "data_emissao": doc["dataEmissao"], "valor_total": round(doc["valorServico"], 2),
+                        "itens": [{"numero": "1", "codigo": doc["servicoCodigo"], "descricao": doc["servicoDescricao"], "valorTotal": doc["valorServico"]}],
+                    }
                 for index, finding in enumerate(findings, start=1):
                     finding["id"] = f"div-{index}"
                 counts, score, nivel = auditoria_risk_summary(findings)
                 resumo = {
-                    "totalItens": len(doc["items"]), "totalDivergencias": len(findings),
+                    "totalItens": len(header["itens"]), "totalDivergencias": len(findings),
                     "critico": counts["critico"], "alto": counts["alto"], "medio": counts["medio"], "baixo": counts["baixo"],
                 }
                 now = local_now()
@@ -8794,11 +9046,11 @@ class SimplesCalcHandler(SimpleHTTPRequestHandler):
                     "created_by", "updated_by", "created_at", "updated_at",
                 ]
                 values = [
-                    row_id, user["company_id"], client_id, client_name, file_name, doc["modelLabel"] or "NF-e", doc["modelCode"],
-                    doc["numero"], doc["serie"], doc["xmlKey"], doc["issuer"].get("name", ""), doc["issuer"].get("document", ""),
-                    doc["recipient"].get("name", ""), doc["recipient"].get("document", ""), doc["dataEmissao"],
-                    round(doc["taxes"].get("vNF", 0), 2), nivel, score,
-                    json.dumps(resumo, ensure_ascii=False), json.dumps(doc["items"], ensure_ascii=False), json.dumps(findings, ensure_ascii=False),
+                    row_id, user["company_id"], client_id, client_name, file_name, header["tipo_documento"], header["modelo"],
+                    header["numero"], header["serie"], header["chave_acesso"], header["emitente_nome"], header["emitente_cnpj"],
+                    header["destinatario_nome"], header["destinatario_cnpj"], header["data_emissao"],
+                    header["valor_total"], nivel, score,
+                    json.dumps(resumo, ensure_ascii=False), json.dumps(header["itens"], ensure_ascii=False), json.dumps(findings, ensure_ascii=False),
                     user["email"], user["email"], now, now,
                 ]
                 placeholders = ", ".join(["?"] * len(columns))

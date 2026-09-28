@@ -254,7 +254,7 @@
     { route: 'sefaz-portal', label: 'Consulta SEFAZ e Portal do Contribuinte', icon: '▣', desc: 'Consulta oficial de documentos fiscais e gestão segura de certificados' },
     { route: 'captador-notas-fiscais', label: 'Captador de Notas Fiscais', icon: '⇓', desc: 'Painel por empresa da captação automática de NF-e, NFC-e, CT-e e NFS-e via certificado digital' },
     { route: 'auditor-fiscal', label: 'Auditor Fiscal (SPED/EFD)', icon: '◲', desc: 'Validação estrutural de arquivos SPED — EFD ICMS/IPI, EFD Contribuições, ECF, ECD e Simples Nacional' },
-    { route: 'auditor-fiscal-nfe', label: 'Auditor Fiscal Inteligente', icon: '◈', desc: 'Auditoria de NF-e/CT-e em XML: estrutura, cadastro, CFOP × UF, ICMS e matemática, com sugestão de correção por IA' },
+    { route: 'auditor-fiscal-nfe', label: 'Auditor Fiscal Inteligente', icon: '◈', desc: 'Auditoria de NF-e/CT-e/NFS-e em XML: estrutura, cadastro, CFOP × UF, ICMS, ISSQN e matemática, com sugestão de correção por IA' },
     { route: 'dashboard', label: 'Cálculo DAS', icon: '▥', desc: 'Apuração interativa do Simples Nacional' },
     { route: 'conttech-simples-nacional', label: 'Conttech Simples Nacional', icon: '§', desc: 'Simulador de apuração do Simples Nacional em 3 etapas' },
     { route: 'diagnostico', label: 'Diagnóstico Tributário', icon: '◉', desc: 'Riscos, inconsistências e recomendações' },
@@ -9196,7 +9196,7 @@
         '<div><small>🟢 Itens conferidos</small><strong>' + (resumo.totalItens || 0) + '</strong></div>' +
       '</div>',
       divergencias.length ? divergencias.map(auditoriaFiscalDivergenciaCard).join('') : '<div class="info-banner"><span>✓</span><div>Nenhuma divergência encontrada nesta análise.</div></div>',
-      '<div class="info-banner" style="margin-top:10px"><span>i</span><div>Auditoria automática de estrutura, CFOP × UF, ICMS (alíquotas de referência) e matemática do documento. Não substitui a análise do profissional fiscal responsável — divergências dependentes de interpretação (benefícios fiscais, reduções de base) aparecem com confiança reduzida.</div></div>',
+      '<div class="info-banner" style="margin-top:10px"><span>i</span><div>Auditoria automática de estrutura, cadastro, CFOP × UF/ICMS (NF-e/CT-e) ou ISSQN/local de incidência (NFS-e) e matemática do documento. Não substitui a análise do profissional fiscal responsável — divergências dependentes de interpretação (benefícios fiscais, reduções de base, exceções de local de incidência) aparecem com confiança reduzida.</div></div>',
     ].join('');
   }
   function renderAuditoriaFiscalList() {
@@ -9211,8 +9211,8 @@
         '<td><button class="row-button" data-action="auditoria-abrir" data-id="' + item.id + '" title="Ver detalhes">→</button></td></tr>';
     }).join('') || '<tr><td colspan="6"><div class="empty-state"><h3>Nenhuma auditoria realizada ainda</h3><p>Envie o XML de uma NF-e ou CT-e para começar.</p></div></td></tr>';
     return [
-      pageHeading('Auditor Fiscal Inteligente', 'Cliente: ' + esc(client.name) + ' · auditoria de NF-e/CT-e em XML (estrutura, CFOP, ICMS e matemática)', ''),
-      '<section class="card"><header class="card-header"><div><h2>Nova auditoria</h2><small>Envie o XML original do documento fiscal (modelo 55/65/57)</small></div></header><div class="card-body">' +
+      pageHeading('Auditor Fiscal Inteligente', 'Cliente: ' + esc(client.name) + ' · auditoria de NF-e/CT-e/NFS-e em XML (estrutura, CFOP, ICMS, ISSQN e matemática)', ''),
+      '<section class="card"><header class="card-header"><div><h2>Nova auditoria</h2><small>Envie o XML original do documento fiscal — NF-e (modelo 55), NFC-e (65), CT-e (57) ou NFS-e (padrão nacional)</small></div></header><div class="card-body">' +
         (ui.pendingFile
           ? '<p><b>Arquivo selecionado:</b> ' + esc(ui.pendingFile.name) + '</p><div class="page-actions">' +
             '<button class="secondary-button" data-action="auditoria-limpar-arquivo">Trocar arquivo</button>' +
