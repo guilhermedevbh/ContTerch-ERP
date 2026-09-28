@@ -49,6 +49,12 @@ try:
 except ImportError:
     CRYPTO_AVAILABLE = False
 
+try:
+    from pypdf import PdfReader
+    PDF_READER_AVAILABLE = True
+except ImportError:
+    PDF_READER_AVAILABLE = False
+
 
 ROOT = Path(__file__).resolve().parent
 
@@ -3208,6 +3214,90 @@ def auditoria_extract_any(xml_data: bytes) -> tuple[str, dict]:
     if "infNFSe" in tags:
         return "nfse", auditoria_extract_nfse(xml_data)
     raise ValueError("O XML não contém uma estrutura reconhecida de NF-e, CT-e ou NFS-e (padrão nacional). Envie o XML original do documento.")
+
+
+# ---------------------------------------------------------------------------
+# Auditoria XML × PDF/DANFE — comparação best-effort. O PDF é representação
+# gráfica e pode estar desatualizado (cancelamento, CC-e); o XML é sempre a
+# fonte da verdade. O PDF nunca é persistido — é lido, comparado e
+# descartado. Quando o PDF não tem camada de texto (digitalizado/escaneado),
+# a auditoria avisa que a conferência é parcial em vez de simular sucesso.
+# ---------------------------------------------------------------------------
+
+def auditoria_extract_pdf_text(pdf_data: bytes) -> str:
+    if not PDF_READER_AVAILABLE:
+        raise RuntimeError("A leitura de PDF não está disponível neste ambiente. Execute: python -m pip install -r requirements.txt")
+    try:
+        reader = PdfReader(io.BytesIO(pdf_data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as error:
+        raise ValueError("Não foi possível ler o PDF anexado — confirme se o arquivo não está corrompido ou protegido por senha.") from error
+
+
+def auditoria_pdf_find_key(text: str) -> str:
+    compact = re.sub(r"\s+", "", text)
+    match = re.search(r"\d{44}", compact) or re.search(r"\d{50}", compact)
+    return match.group(0) if match else ""
+
+
+def auditoria_pdf_find_amount(text: str, labels: list[str]) -> float:
+    for label in labels:
+        match = re.search(re.escape(label) + r"[^\d]{0,20}([\d.,]+\d)", text, flags=re.IGNORECASE)
+        if match:
+            raw = match.group(1).strip().rstrip(".,")
+            try:
+                if "," in raw:
+                    return float(raw.replace(".", "").replace(",", "."))
+                return float(raw)
+            except ValueError:
+                continue
+    return 0.0
+
+
+def auditoria_compare_xml_pdf(doc_type: str, header: dict, pdf_text: str) -> list[dict]:
+    findings: list[dict] = []
+    if not pdf_text.strip():
+        findings.append(auditoria_finding(
+            "medio", "Leitura do PDF anexado", "sem texto extraível", "PDF com camada de texto",
+            "Não foi possível extrair texto do PDF anexado — ele pode ser um documento digitalizado/escaneado (imagem), sem camada de texto.",
+            "A comparação entre o XML e o PDF/DANFE não pôde ser realizada automaticamente; a conferência é parcial.",
+            "Boas práticas de conferência documental (XML é sempre a fonte da verdade, o PDF é representação gráfica)", 90,
+            acao="Conferir visualmente o PDF anexado contra os dados do XML já auditados.",
+        ))
+        return findings
+
+    pdf_key = auditoria_pdf_find_key(pdf_text)
+    xml_key = header["chave_acesso"]
+    if pdf_key and xml_key and pdf_key != xml_key:
+        findings.append(auditoria_finding(
+            "critico", "Chave de acesso — XML × PDF", pdf_key, xml_key,
+            "A chave de acesso lida no PDF anexado diverge da chave do XML enviado.",
+            "O PDF pode pertencer a outro documento fiscal — confira se os dois arquivos são do mesmo documento.",
+            "Boas práticas de conferência documental (XML é sempre a fonte da verdade, o PDF é representação gráfica)", 90,
+        ))
+
+    labels = (["valor total da nota", "valor total"] if doc_type == "nfe"
+              else ["valor líquido da nfs-e", "valor total do serviço", "valor do serviço"])
+    pdf_total = auditoria_pdf_find_amount(pdf_text, labels)
+    if pdf_total > 0 and header["valor_total"] > 0 and abs(pdf_total - header["valor_total"]) > 0.05:
+        findings.append(auditoria_finding(
+            "alto", "Valor total — XML × PDF", f"R$ {header['valor_total']:.2f} (XML)", f"R$ {pdf_total:.2f} (PDF)",
+            "O valor total lido no PDF anexado diverge do valor total do XML enviado.",
+            f"Diferença de R$ {abs(pdf_total - header['valor_total']):.2f} entre os dois documentos.",
+            "Boas práticas de conferência documental (XML é sempre a fonte da verdade, o PDF é representação gráfica)", 75,
+            acao="Confirmar qual dos dois documentos está desatualizado (o PDF pode não refletir eventos posteriores ao XML).",
+        ))
+
+    numero = header["numero"]
+    if numero and not re.search(r"(?<!\d)" + re.escape(numero) + r"(?!\d)", re.sub(r"\s+", "", pdf_text)):
+        findings.append(auditoria_finding(
+            "baixo", "Número do documento — XML × PDF", numero, "não localizado no texto do PDF",
+            "O número do documento informado no XML não foi localizado no texto extraído do PDF anexado.",
+            "Pode ser apenas uma limitação da extração de texto do PDF, não necessariamente um erro real.",
+            "Boas práticas de conferência documental", 35,
+            acao="Conferir visualmente se o PDF corresponde ao mesmo documento do XML.",
+        ))
+    return findings
 
 
 def auditoria_ai_suggestion(item: dict) -> dict:
@@ -9030,6 +9120,11 @@ class SimplesCalcHandler(SimpleHTTPRequestHandler):
                         "data_emissao": doc["dataEmissao"], "valor_total": round(doc["valorServico"], 2),
                         "itens": [{"numero": "1", "codigo": doc["servicoCodigo"], "descricao": doc["servicoDescricao"], "valorTotal": doc["valorServico"]}],
                     }
+                pdf_base64 = payload.get("pdfBase64", "")
+                if pdf_base64:
+                    pdf_bytes = decode_base64_field(pdf_base64, MAX_AUDITORIA_PDF_BYTES, "PDF/DANFE anexado")
+                    pdf_text = auditoria_extract_pdf_text(pdf_bytes)
+                    findings.extend(auditoria_compare_xml_pdf(doc_type, header, pdf_text))
                 for index, finding in enumerate(findings, start=1):
                     finding["id"] = f"div-{index}"
                 counts, score, nivel = auditoria_risk_summary(findings)
@@ -9061,6 +9156,8 @@ class SimplesCalcHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": True, "item": self.auditoria_fiscal_row(saved)})
             except ValueError as error:
                 self.send_json({"error": str(error)}, HTTPStatus.UNPROCESSABLE_ENTITY)
+            except RuntimeError as error:
+                self.send_json({"error": str(error)}, HTTPStatus.SERVICE_UNAVAILABLE)
             return
 
         auditoria_fiscal_ia_match = re.fullmatch(r"/api/auditoria-fiscal/([a-f0-9]{32})/sugestao-ia", path)

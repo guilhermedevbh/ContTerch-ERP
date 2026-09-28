@@ -9018,7 +9018,7 @@
 
   var auditoriaFiscalState = { loadedForClient: null, loading: false, items: [] };
   function auditoriaFiscalUi() {
-    if (!state.auditoriaFiscalUi) state.auditoriaFiscalUi = { view: 'list', detailId: null, detail: null, pendingFile: null, uploading: false, uploadError: '' };
+    if (!state.auditoriaFiscalUi) state.auditoriaFiscalUi = { view: 'list', detailId: null, detail: null, pendingFile: null, pendingPdf: null, uploading: false, uploadError: '' };
     return state.auditoriaFiscalUi;
   }
   function loadAuditoriaFiscal(force) {
@@ -9056,17 +9056,35 @@
     input.click();
   }
   function auditoriaClearPendingFile() { auditoriaFiscalUi().pendingFile = null; auditoriaFiscalUi().uploadError = ''; route(); }
+  function auditoriaPickPdfFile() {
+    var input = document.createElement('input');
+    input.type = 'file'; input.accept = '.pdf,application/pdf';
+    input.onchange = function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      auditoriaFiscalUi().uploadError = '';
+      readFileAsBase64(file).then(function (base64) {
+        auditoriaFiscalUi().pendingPdf = { name: file.name, base64: base64 };
+        route();
+      }).catch(function (error) { auditoriaFiscalUi().uploadError = error.message; route(); });
+    };
+    input.click();
+  }
+  function auditoriaClearPendingPdf() { auditoriaFiscalUi().pendingPdf = null; route(); }
   function submitAuditoriaFiscal() {
     var client = currentClient();
-    var pending = auditoriaFiscalUi().pendingFile;
+    var ui = auditoriaFiscalUi();
+    var pending = ui.pendingFile;
     if (!client || !pending) return;
-    auditoriaFiscalUi().uploading = true;
+    ui.uploading = true;
     route();
-    apiRequest('/api/auditoria-fiscal', { method: 'POST', body: JSON.stringify({ clientId: client.id, clientName: client.name, fileName: pending.name, xmlBase64: pending.base64 }) })
+    var body = { clientId: client.id, clientName: client.name, fileName: pending.name, xmlBase64: pending.base64 };
+    if (ui.pendingPdf) body.pdfBase64 = ui.pendingPdf.base64;
+    apiRequest('/api/auditoria-fiscal', { method: 'POST', body: JSON.stringify(body) })
       .then(function (result) {
         auditoriaFiscalState.items.unshift(result.item);
-        var ui = auditoriaFiscalUi();
-        ui.uploading = false; ui.pendingFile = null; ui.view = 'detail'; ui.detailId = result.item.id; ui.detail = result.item;
+        var uiNow = auditoriaFiscalUi();
+        uiNow.uploading = false; uiNow.pendingFile = null; uiNow.pendingPdf = null; uiNow.view = 'detail'; uiNow.detailId = result.item.id; uiNow.detail = result.item;
         audit('Auditoria fiscal executada', pending.name + ' · risco ' + result.item.nivelRisco);
         toast('Auditoria concluída', result.item.divergencias.length + ' divergência(s) encontrada(s).', result.item.nivelRisco === 'ok' ? 'success' : 'warning');
         route();
@@ -9214,7 +9232,11 @@
       pageHeading('Auditor Fiscal Inteligente', 'Cliente: ' + esc(client.name) + ' · auditoria de NF-e/CT-e/NFS-e em XML (estrutura, CFOP, ICMS, ISSQN e matemática)', ''),
       '<section class="card"><header class="card-header"><div><h2>Nova auditoria</h2><small>Envie o XML original do documento fiscal — NF-e (modelo 55), NFC-e (65), CT-e (57) ou NFS-e (padrão nacional)</small></div></header><div class="card-body">' +
         (ui.pendingFile
-          ? '<p><b>Arquivo selecionado:</b> ' + esc(ui.pendingFile.name) + '</p><div class="page-actions">' +
+          ? '<p><b>XML selecionado:</b> ' + esc(ui.pendingFile.name) + '</p>' +
+            '<p>' + (ui.pendingPdf
+              ? '<b>PDF/DANFE anexado:</b> ' + esc(ui.pendingPdf.name) + ' <button class="row-button" data-action="auditoria-limpar-pdf" title="Remover PDF">✕</button>'
+              : '<button class="secondary-button" data-action="auditoria-selecionar-pdf">↥ Anexar PDF/DANFE (opcional)</button>') + '</p>' +
+            '<div class="page-actions">' +
             '<button class="secondary-button" data-action="auditoria-limpar-arquivo">Trocar arquivo</button>' +
             '<button class="primary-button" data-action="auditoria-executar"' + (ui.uploading ? ' disabled' : '') + '>' + (ui.uploading ? 'Analisando…' : '▣ Executar auditoria') + '</button>' +
           '</div>'
@@ -11314,6 +11336,8 @@
     else if (action === 'doc-select') { docsUi().tipo = actionEl.getAttribute('data-tipo'); route(); }
     else if (action === 'auditoria-selecionar-arquivo') auditoriaPickXmlFile();
     else if (action === 'auditoria-limpar-arquivo') auditoriaClearPendingFile();
+    else if (action === 'auditoria-selecionar-pdf') auditoriaPickPdfFile();
+    else if (action === 'auditoria-limpar-pdf') auditoriaClearPendingPdf();
     else if (action === 'auditoria-executar') submitAuditoriaFiscal();
     else if (action === 'auditoria-abrir') openAuditoriaFiscalDetail(actionEl.getAttribute('data-id'));
     else if (action === 'auditoria-voltar') closeAuditoriaFiscalDetail();
